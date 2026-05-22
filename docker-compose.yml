@@ -1,0 +1,15 @@
+services:
+  subsonicbot:
+    build: .
+    container_name: subsonicbot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - PORT=8080
+      - DATABASE_PATH=/app/data/users.db
+    volumes:
+      # Persist SQLite database (users.db) on the host machine under the ./data folder
+      - ./data:/app/data

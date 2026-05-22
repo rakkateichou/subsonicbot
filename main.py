@@ -68,10 +68,26 @@ bot = TeleBot(BOT_TOKEN)
 # -------------------------------------------------------------
 # DATABASE INITIALIZATION
 # -------------------------------------------------------------
+DATABASE_PATH = os.getenv("DATABASE_PATH", "users.db")
+
+# Ensure the database parent directory exists
+db_dir = os.path.dirname(DATABASE_PATH)
+if db_dir:
+    os.makedirs(db_dir, exist_ok=True)
+
+# Automatically migrate legacy users.db from local directory to dynamic DATABASE_PATH
+if DATABASE_PATH != "users.db" and not os.path.exists(DATABASE_PATH) and os.path.exists("users.db"):
+    try:
+        import shutil
+        shutil.copy2("users.db", DATABASE_PATH)
+        logger.info(f"Automatically migrated existing 'users.db' database to '{DATABASE_PATH}'.")
+    except Exception as e:
+        logger.error(f"Failed to automatically migrate 'users.db' to '{DATABASE_PATH}': {e}")
+
 def init_db():
     logger.info("Initializing SQLite database connection and schemas...")
     try:
-        with sqlite3.connect("users.db") as conn:
+        with sqlite3.connect(DATABASE_PATH) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -139,7 +155,7 @@ def process_password(message, server_url, username):
     logger.info(f"[LOGIN STEP 3] process_password for user_id {user_id}: Received password (length={len(password)}). Saving to database...")
     
     try:
-        with sqlite3.connect("users.db") as conn:
+        with sqlite3.connect(DATABASE_PATH) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO users (user_id, server_url, username, password)
                 VALUES (?, ?, ?, ?)
@@ -177,7 +193,7 @@ def query_text(inline_query):
     
     try:
         logger.debug(f"[INLINE QUERY] Querying SQLite for user credentials...")
-        with sqlite3.connect("users.db") as conn:
+        with sqlite3.connect(DATABASE_PATH) as conn:
             row = conn.execute("SELECT server_url, username, password FROM users WHERE user_id = ?", (user_id,)).fetchone()
             
         if not row:
@@ -337,7 +353,7 @@ def process_chosen_track(user_id, track_id, inline_message_id):
     try:
         # 1. Fetch user credentials from SQLite database
         logger.debug(f"[BACKGROUND WORKER] Fetching credentials for user_id: {user_id}...")
-        with sqlite3.connect("users.db") as conn:
+        with sqlite3.connect(DATABASE_PATH) as conn:
             row = conn.execute("SELECT server_url, username, password FROM users WHERE user_id = ?", (user_id,)).fetchone()
             
         if not row:
@@ -352,7 +368,7 @@ def process_chosen_track(user_id, track_id, inline_message_id):
         
         # 2. Check if this track is already cached in file_cache
         logger.debug(f"[BACKGROUND WORKER] Querying file_cache for track_id: {track_id}...")
-        with sqlite3.connect("users.db") as conn:
+        with sqlite3.connect(DATABASE_PATH) as conn:
             cache_row = conn.execute("SELECT file_id, title, artist, duration FROM file_cache WHERE track_id = ?", (track_id,)).fetchone()
             
         if cache_row:
@@ -511,7 +527,7 @@ def process_chosen_track(user_id, track_id, inline_message_id):
         # 8. Cache the file_id in SQLite
         logger.info(f"[BACKGROUND WORKER] Caching file_id '{file_id}' in SQLite file_cache table...")
         try:
-            with sqlite3.connect("users.db") as conn:
+            with sqlite3.connect(DATABASE_PATH) as conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO file_cache (track_id, file_id, title, artist, duration) VALUES (?, ?, ?, ?, ?)",
                     (track_id, file_id, title, artist, duration)
@@ -609,7 +625,7 @@ def stream_proxy(track_id):
         abort(400)
         
     try:
-        with sqlite3.connect("users.db") as conn:
+        with sqlite3.connect(DATABASE_PATH) as conn:
             row = conn.execute("SELECT server_url, username, password FROM users WHERE user_id = ?", (user_id,)).fetchone()
             
         if not row:
