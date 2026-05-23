@@ -298,6 +298,19 @@ def process_password(message, server_url, username):
         reply_markup=types.ReplyKeyboardRemove()
     )
     
+    def send_final_message(text):
+        try:
+            bot.delete_message(message.chat.id, status_msg.message_id)
+            logger.debug("[LOGIN] Deleted temporary status message.")
+        except Exception as delete_err:
+            logger.warning(f"[LOGIN WARNING] Failed to delete temporary status message: {delete_err}")
+        
+        bot.send_message(
+            message.chat.id,
+            text,
+            parse_mode="Markdown"
+        )
+
     rest_url = server_url if server_url.endswith('/rest') else server_url + "/rest"
     auth = get_auth_params(username, password)
     ping_url = f"{rest_url}/ping?{auth}"
@@ -309,22 +322,16 @@ def process_password(message, server_url, username):
         logger.debug(f"[LOGIN TEST] Subsonic test ping HTTP status: {req.status_code}")
         
         if req.status_code != 200:
-            bot.edit_message_text(
-                f"❌ *Connection Failed!*\n\nYour server returned HTTP status `{req.status_code}` instead of `200`.\n\nPlease check your server URL and try logging in again with /login.",
-                message.chat.id,
-                status_msg.message_id,
-                parse_mode="Markdown"
+            send_final_message(
+                f"❌ *Connection Failed!*\n\nYour server returned HTTP status `{req.status_code}` instead of `200`.\n\nPlease check your server URL and try logging in again with /login."
             )
             return
             
         try:
             res = req.json()
         except Exception:
-            bot.edit_message_text(
-                "❌ *Authentication Failed!*\n\nServer responded, but it did not return valid Subsonic JSON. Please verify that your URL points to a Subsonic/Navidrome server API.\n\nPlease try again with /login.",
-                message.chat.id,
-                status_msg.message_id,
-                parse_mode="Markdown"
+            send_final_message(
+                "❌ *Authentication Failed!*\n\nServer responded, but it did not return valid Subsonic JSON. Please verify that your URL points to a Subsonic/Navidrome server API.\n\nPlease try again with /login."
             )
             return
             
@@ -335,32 +342,23 @@ def process_password(message, server_url, username):
             error_data = response_data.get("error", {})
             error_code = error_data.get("code", "Unknown")
             error_msg = error_data.get("message", "Wrong username or password.")
-            bot.edit_message_text(
-                f"❌ *Authentication Failed!* (Error Code {error_code})\n\n{error_msg}\n\nPlease check your credentials and try again with /login.",
-                message.chat.id,
-                status_msg.message_id,
-                parse_mode="Markdown"
+            send_final_message(
+                f"❌ *Authentication Failed!* (Error Code {error_code})\n\n{error_msg}\n\nPlease check your credentials and try again with /login."
             )
             return
             
         elif status == "ok":
             logger.info(f"[LOGIN SUCCESS] Subsonic test connection successful for user_id {user_id}.")
         else:
-            bot.edit_message_text(
-                f"❌ *Connection Warning!*\n\nReceived unknown response status: `{status}`.\n\nPlease try again with /login.",
-                message.chat.id,
-                status_msg.message_id,
-                parse_mode="Markdown"
+            send_final_message(
+                f"❌ *Connection Warning!*\n\nReceived unknown response status: `{status}`.\n\nPlease try again with /login."
             )
             return
             
     except requests.exceptions.RequestException as req_err:
         logger.warning(f"[LOGIN TEST FAILED] Network connection error: {req_err}")
-        bot.edit_message_text(
-            f"❌ *Connection Error!*\n\nCould not reach the server.\n\n*Details:* `{str(req_err)}`\n\nPlease check that your server URL is correct, online, and publicly accessible, then try again with /login.",
-            message.chat.id,
-            status_msg.message_id,
-            parse_mode="Markdown"
+        send_final_message(
+            f"❌ *Connection Error!*\n\nCould not reach the server.\n\n*Details:* `{str(req_err)}`\n\nPlease check that your server URL is correct, online, and publicly accessible, then try again with /login."
         )
         return
         
@@ -373,19 +371,13 @@ def process_password(message, server_url, username):
             """, (user_id, server_url, username, password))
         logger.info(f"[LOGIN DATABASE] Saved verified credentials successfully for user_id {user_id}.")
         
-        bot.edit_message_text(
-            f"✅ *Successfully logged in!*\n\nYour Subsonic/Navidrome credentials are verified and securely saved.\n\nYou can now share your played music in any chat by typing: `@{BOT_USERNAME}`",
-            message.chat.id,
-            status_msg.message_id,
-            parse_mode="Markdown"
+        send_final_message(
+            f"✅ *Successfully logged in!*\n\nYour Subsonic/Navidrome credentials are verified and securely saved.\n\nYou can now share your played music in any chat by typing: `@{BOT_USERNAME}`"
         )
     except Exception as db_err:
         logger.exception(f"[LOGIN DATABASE ERROR] Failed to save credentials to database for user_id {user_id}: {db_err}")
-        bot.edit_message_text(
-            "❌ *Database Error!*\n\nYour credentials were verified but could not be saved to our internal database. Please try again with /login.",
-            message.chat.id,
-            status_msg.message_id,
-            parse_mode="Markdown"
+        send_final_message(
+            "❌ *Database Error!*\n\nYour credentials were verified but could not be saved to our internal database. Please try again with /login."
         )
 
 def get_auth_params(username, password):
