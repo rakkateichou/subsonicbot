@@ -738,7 +738,7 @@ def process_chosen_track(user_id, track_id, inline_message_id):
                 title=title,
                 performer=artist,
                 duration=duration,
-                caption=f"\"{title}\" has been downloaded successfully!",
+                caption=f"📥 \"{title}\" has been downloaded successfully!",
                 disable_notification=True,
                 timeout=60
             )
