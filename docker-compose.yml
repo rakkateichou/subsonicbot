@@ -10,6 +10,8 @@ services:
     environment:
       - PORT=8080
       - DATABASE_PATH=/app/data/users.db
+      #- BOT_TOKEN=
+      #- WEBHOOK_URL=
     volumes:
       # Persist SQLite database (users.db) on the host machine under the ./data folder
       - ./data:/app/data

@@ -65,6 +65,26 @@ else:
 
 bot = TeleBot(BOT_TOKEN)
 
+BOT_USERNAME = "submusbot"
+try:
+    bot_info = bot.get_me()
+    BOT_USERNAME = bot_info.username
+    logger.info(f"Bot info loaded. Username: @{BOT_USERNAME}")
+except Exception as get_me_err:
+    logger.warning(f"Failed to fetch bot username dynamically: {get_me_err}. Defaulting to 'submusbot'")
+
+try:
+    bot.set_my_commands([
+        types.BotCommand("start", "Start the bot and get a welcome message"),
+        types.BotCommand("login", "Connect your Subsonic/Navidrome account"),
+        types.BotCommand("account", "View your connected account details"),
+        types.BotCommand("logout", "Disconnect your Subsonic/Navidrome account"),
+        types.BotCommand("help", "Show the list of supported commands")
+    ])
+    logger.info("Bot commands registered successfully with Telegram.")
+except Exception as set_cmd_err:
+    logger.warning(f"Failed to set bot commands in Telegram: {set_cmd_err}")
+
 # -------------------------------------------------------------
 # DATABASE INITIALIZATION
 # -------------------------------------------------------------
@@ -119,37 +139,148 @@ init_db()
 def start_cmd(message):
     user_id = message.from_user.id
     logger.info(f"[COMMAND] /start received from user_id: {user_id} (chat_id: {message.chat.id})")
-    bot.reply_to(message, "Welcome to the Subsonic/Navidrome Bot!\n\nPlease use /login to connect your account so you can share what you are listening to in any chat.")
+    welcome_text = (
+        "Welcome to the Subsonic/Navidrome Bot! 🎵\n\n"
+        "Connect your server to share what you are listening to in any chat via inline queries!\n\n"
+        "Here is the list of supported commands:\n"
+        "/start - Start the bot and get a welcome message\n"
+        "/login - Connect your Subsonic/Navidrome account\n"
+        "/account - View your connected account details\n"
+        "/logout - Disconnect your Subsonic/Navidrome account\n"
+        "/help - Show this list of supported commands"
+    )
+    bot.reply_to(message, welcome_text)
+
+@bot.message_handler(commands=['help'])
+def help_cmd(message):
+    user_id = message.from_user.id
+    logger.info(f"[COMMAND] /help received from user_id: {user_id} (chat_id: {message.chat.id})")
+    help_text = (
+        "Here is the list of supported commands:\n"
+        "/start - Start the bot and get a welcome message\n"
+        "/login - Connect your Subsonic/Navidrome account\n"
+        "/account - View your connected account details\n"
+        "/logout - Disconnect your Subsonic/Navidrome account\n"
+        "/help - Show this list of supported commands"
+    )
+    bot.reply_to(message, help_text)
+
+@bot.message_handler(commands=['account'])
+def account_cmd(message):
+    user_id = message.from_user.id
+    logger.info(f"[COMMAND] /account received from user_id: {user_id} (chat_id: {message.chat.id})")
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            row = conn.execute("SELECT server_url, username FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        
+        if row:
+            server_url = row[0]
+            username = row[1]
+            account_text = (
+                "👤 *Connected Account Details:*\n"
+                f"• *Server URL:* {server_url}\n"
+                f"• *Username:* {username}\n\n"
+                f"You can now use the bot in any chat by typing: `@{BOT_USERNAME}`"
+            )
+            bot.reply_to(message, account_text, parse_mode="Markdown")
+        else:
+            bot.reply_to(
+                message, 
+                "You don't have a connected Subsonic/Navidrome account yet.\n"
+                "Please use /login to connect your account."
+            )
+    except Exception as db_err:
+        logger.exception(f"[COMMAND ERROR] Failed to query account for user_id {user_id}: {db_err}")
+        bot.reply_to(message, "An internal database error occurred. Please try again.")
+
+@bot.message_handler(commands=['logout'])
+def logout_cmd(message):
+    user_id = message.from_user.id
+    logger.info(f"[COMMAND] /logout received from user_id: {user_id} (chat_id: {message.chat.id})")
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+            rows_deleted = cursor.rowcount
+        
+        if rows_deleted > 0:
+            bot.reply_to(
+                message, 
+                "🚪 *Successfully logged out!*\n\nYour server URL, username, and password have been removed from our database.\n\n"
+                "If you want to use the bot again, you can reconnect using /login."
+            )
+            logger.info(f"[LOGOUT SUCCESS] Cleared credentials for user_id {user_id}.")
+        else:
+            bot.reply_to(
+                message, 
+                "You are not currently logged in.\n"
+                "Use /login to connect your Subsonic/Navidrome account."
+            )
+    except Exception as db_err:
+        logger.exception(f"[COMMAND ERROR] Failed to delete account for user_id {user_id}: {db_err}")
+        bot.reply_to(message, "An internal database error occurred. Please try again.")
+
+def check_cancel(message):
+    text = message.text.strip().lower() if message.text else ""
+    if text in ("/cancel", "cancel", "❌ cancel"):
+        logger.info(f"[LOGIN] Login process cancelled by user {message.from_user.id}")
+        bot.clear_step_handler_by_chat_id(chat_id=message.chat.id)
+        bot.reply_to(message, "❌ Login process cancelled.", reply_markup=types.ReplyKeyboardRemove())
+        return True
+    return False
 
 @bot.message_handler(commands=['login'])
 def login_cmd(message):
     user_id = message.from_user.id
     logger.info(f"[COMMAND] /login initiated by user_id: {user_id} (chat_id: {message.chat.id})")
-    msg = bot.reply_to(message, "Please send your Subsonic/Navidrome server base URL (e.g., http://yourserver:4533):")
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.add(types.KeyboardButton("❌ Cancel"))
+    
+    msg = bot.reply_to(
+        message, 
+        "Please send your Subsonic/Navidrome server base URL (e.g., http://yourserver:4533):",
+        reply_markup=markup
+    )
     bot.register_next_step_handler(msg, process_url)
 
 def process_url(message):
+    if check_cancel(message):
+        return
     user_id = message.from_user.id
     server_url = message.text.strip().rstrip('/')
     logger.info(f"[LOGIN STEP 1] process_url for user_id {user_id}: Input url='{server_url}'")
     
     if not server_url.startswith('http'):
         logger.warning(f"[LOGIN STEP 1 FAILED] Invalid URL scheme from user_id {user_id}: '{server_url}'")
-        bot.reply_to(message, "Invalid URL. Please start again with /login and provide a URL starting with http:// or https://")
+        bot.reply_to(
+            message, 
+            "Invalid URL. Please start again with /login and provide a URL starting with http:// or https://",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
         return
         
-    msg = bot.reply_to(message, "Great. Now send your username:")
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.add(types.KeyboardButton("❌ Cancel"))
+    
+    msg = bot.reply_to(message, "Great. Now send your username:", reply_markup=markup)
     bot.register_next_step_handler(msg, process_username, server_url)
 
 def process_username(message, server_url):
+    if check_cancel(message):
+        return
     user_id = message.from_user.id
     username = message.text.strip()
     logger.info(f"[LOGIN STEP 2] process_username for user_id {user_id}: Username='{username}', Server='{server_url}'")
     
-    msg = bot.reply_to(message, "Got it. Finally, send your password:")
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.add(types.KeyboardButton("❌ Cancel"))
+    
+    msg = bot.reply_to(message, "Got it. Finally, send your password:", reply_markup=markup)
     bot.register_next_step_handler(msg, process_password, server_url, username)
 
 def process_password(message, server_url, username):
+    if check_cancel(message):
+        return
     user_id = message.from_user.id
     password = message.text.strip()
     logger.info(f"[LOGIN STEP 3] process_password for user_id {user_id}: Received password (length={len(password)}). Saving to database...")
@@ -163,7 +294,7 @@ def process_password(message, server_url, username):
         logger.info(f"[LOGIN SUCCESS] Database insertion succeeded for user_id {user_id}.")
     except Exception as db_err:
         logger.exception(f"[LOGIN ERROR] Failed to save credentials to database for user_id {user_id}: {db_err}")
-        bot.reply_to(message, "An internal database error occurred. Please try again.")
+        bot.reply_to(message, "An internal database error occurred. Please try again.", reply_markup=types.ReplyKeyboardRemove())
         return
     
     try:
@@ -171,10 +302,10 @@ def process_password(message, server_url, username):
         logger.info(f"[LOGIN] Attempting to delete password message (message_id: {message.message_id}) for privacy...")
         bot.delete_message(message.chat.id, message.message_id) 
         logger.info("[LOGIN] Password message deleted successfully.")
-        bot.send_message(message.chat.id, "Successfully logged in! (Your password message has been deleted for security).\n\nYou can now type `@submusbot` in any chat to share your played tracks.")
+        bot.send_message(message.chat.id, f"Successfully logged in! (Your password message has been deleted for security).\n\nYou can now type `@{BOT_USERNAME}` in any chat to share your played tracks.", reply_markup=types.ReplyKeyboardRemove())
     except Exception as delete_err:
         logger.warning(f"[LOGIN WARNING] Failed to delete password message: {delete_err}")
-        bot.send_message(message.chat.id, "Successfully logged in!\n\nPlease delete your password message above for security.\nYou can now type `@submusbot` in any chat to share your played tracks.")
+        bot.send_message(message.chat.id, f"Successfully logged in!\n\nPlease delete your password message above for security.\nYou can now type `@{BOT_USERNAME}` in any chat to share your played tracks.", reply_markup=types.ReplyKeyboardRemove())
 
 def get_auth_params(username, password):
     """Generates a secure dynamic MD5 authentication string for the Subsonic API."""
@@ -197,15 +328,29 @@ def query_text(inline_query):
             row = conn.execute("SELECT server_url, username, password FROM users WHERE user_id = ?", (user_id,)).fetchone()
             
         if not row:
-            logger.warning(f"[INLINE QUERY] User {user_id} not logged in database. Sending redirect pm button...")
+            logger.warning(f"[INLINE QUERY] User {user_id} not logged in database. Sending login entry...")
+            login_help_article = types.InlineQueryResultArticle(
+                id="login_help",
+                title="🔑 Not logged in!",
+                description="Click here to learn how to connect your Navidrome/Subsonic server.",
+                input_message_content=types.InputTextMessageContent(
+                    message_text=(
+                        "To use this bot, you need to connect it to your Navidrome/Subsonic server first.\n\n"
+                        f"1. Start a direct chat with me: @{BOT_USERNAME}\n"
+                        "2. Send the `/login` command.\n"
+                        "3. Follow the simple steps to set up your server, username, and password.\n\n"
+                        "After that, you'll be able to instantly search and share your music in any chat!"
+                    )
+                )
+            )
             bot.answer_inline_query(
                 inline_query.id, 
-                [], 
+                [login_help_article], 
                 cache_time=0, 
                 switch_pm_text="🔑 Login to Subsonic First", 
                 switch_pm_parameter="login"
             )
-            logger.info(f"[INLINE QUERY] Answered inline query {inline_query.id} with PM login button redirect.")
+            logger.info(f"[INLINE QUERY] Answered inline query {inline_query.id} with PM login button and helpful entry.")
             return
             
         server_url = row[0].rstrip('/')
