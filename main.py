@@ -283,29 +283,110 @@ def process_password(message, server_url, username):
         return
     user_id = message.from_user.id
     password = message.text.strip()
-    logger.info(f"[LOGIN STEP 3] process_password for user_id {user_id}: Received password (length={len(password)}). Saving to database...")
     
+    # Securely delete the password message IMMEDIATELY for privacy
+    try:
+        bot.delete_message(message.chat.id, message.message_id)
+        logger.info("[LOGIN] Password message deleted immediately for security.")
+    except Exception as delete_err:
+        logger.warning(f"[LOGIN WARNING] Failed to delete password message immediately: {delete_err}")
+        
+    # Inform the user that we are testing the connection
+    status_msg = bot.send_message(
+        message.chat.id, 
+        "🔄 Testing connection to your Subsonic server...", 
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    
+    rest_url = server_url if server_url.endswith('/rest') else server_url + "/rest"
+    auth = get_auth_params(username, password)
+    ping_url = f"{rest_url}/ping?{auth}"
+    
+    logger.info(f"[LOGIN TEST] Testing Subsonic credentials for user {username} on {rest_url}...")
+    
+    try:
+        req = requests.get(ping_url, timeout=8)
+        logger.debug(f"[LOGIN TEST] Subsonic test ping HTTP status: {req.status_code}")
+        
+        if req.status_code != 200:
+            bot.edit_message_text(
+                f"❌ *Connection Failed!*\n\nYour server returned HTTP status `{req.status_code}` instead of `200`.\n\nPlease check your server URL and try logging in again with /login.",
+                message.chat.id,
+                status_msg.message_id,
+                parse_mode="Markdown"
+            )
+            return
+            
+        try:
+            res = req.json()
+        except Exception:
+            bot.edit_message_text(
+                "❌ *Authentication Failed!*\n\nServer responded, but it did not return valid Subsonic JSON. Please verify that your URL points to a Subsonic/Navidrome server API.\n\nPlease try again with /login.",
+                message.chat.id,
+                status_msg.message_id,
+                parse_mode="Markdown"
+            )
+            return
+            
+        response_data = res.get("subsonic-response", {})
+        status = response_data.get("status")
+        
+        if status == "failed":
+            error_data = response_data.get("error", {})
+            error_code = error_data.get("code", "Unknown")
+            error_msg = error_data.get("message", "Wrong username or password.")
+            bot.edit_message_text(
+                f"❌ *Authentication Failed!* (Error Code {error_code})\n\n{error_msg}\n\nPlease check your credentials and try again with /login.",
+                message.chat.id,
+                status_msg.message_id,
+                parse_mode="Markdown"
+            )
+            return
+            
+        elif status == "ok":
+            logger.info(f"[LOGIN SUCCESS] Subsonic test connection successful for user_id {user_id}.")
+        else:
+            bot.edit_message_text(
+                f"❌ *Connection Warning!*\n\nReceived unknown response status: `{status}`.\n\nPlease try again with /login.",
+                message.chat.id,
+                status_msg.message_id,
+                parse_mode="Markdown"
+            )
+            return
+            
+    except requests.exceptions.RequestException as req_err:
+        logger.warning(f"[LOGIN TEST FAILED] Network connection error: {req_err}")
+        bot.edit_message_text(
+            f"❌ *Connection Error!*\n\nCould not reach the server.\n\n*Details:* `{str(req_err)}`\n\nPlease check that your server URL is correct, online, and publicly accessible, then try again with /login.",
+            message.chat.id,
+            status_msg.message_id,
+            parse_mode="Markdown"
+        )
+        return
+        
+    # If the connection test succeeds, save the credentials!
     try:
         with sqlite3.connect(DATABASE_PATH) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO users (user_id, server_url, username, password)
                 VALUES (?, ?, ?, ?)
             """, (user_id, server_url, username, password))
-        logger.info(f"[LOGIN SUCCESS] Database insertion succeeded for user_id {user_id}.")
+        logger.info(f"[LOGIN DATABASE] Saved verified credentials successfully for user_id {user_id}.")
+        
+        bot.edit_message_text(
+            f"✅ *Successfully logged in!*\n\nYour Subsonic/Navidrome credentials are verified and securely saved.\n\nYou can now share your played music in any chat by typing: `@{BOT_USERNAME}`",
+            message.chat.id,
+            status_msg.message_id,
+            parse_mode="Markdown"
+        )
     except Exception as db_err:
-        logger.exception(f"[LOGIN ERROR] Failed to save credentials to database for user_id {user_id}: {db_err}")
-        bot.reply_to(message, "An internal database error occurred. Please try again.", reply_markup=types.ReplyKeyboardRemove())
-        return
-    
-    try:
-        # Delete message with password for safety
-        logger.info(f"[LOGIN] Attempting to delete password message (message_id: {message.message_id}) for privacy...")
-        bot.delete_message(message.chat.id, message.message_id) 
-        logger.info("[LOGIN] Password message deleted successfully.")
-        bot.send_message(message.chat.id, f"Successfully logged in! (Your password message has been deleted for security).\n\nYou can now type `@{BOT_USERNAME}` in any chat to share your played tracks.", reply_markup=types.ReplyKeyboardRemove())
-    except Exception as delete_err:
-        logger.warning(f"[LOGIN WARNING] Failed to delete password message: {delete_err}")
-        bot.send_message(message.chat.id, f"Successfully logged in!\n\nPlease delete your password message above for security.\nYou can now type `@{BOT_USERNAME}` in any chat to share your played tracks.", reply_markup=types.ReplyKeyboardRemove())
+        logger.exception(f"[LOGIN DATABASE ERROR] Failed to save credentials to database for user_id {user_id}: {db_err}")
+        bot.edit_message_text(
+            "❌ *Database Error!*\n\nYour credentials were verified but could not be saved to our internal database. Please try again with /login.",
+            message.chat.id,
+            status_msg.message_id,
+            parse_mode="Markdown"
+        )
 
 def get_auth_params(username, password):
     """Generates a secure dynamic MD5 authentication string for the Subsonic API."""
@@ -372,6 +453,9 @@ def query_text(inline_query):
         try:
             req = requests.get(now_playing_endpoint, timeout=10)
             logger.debug(f"[INLINE QUERY] getNowPlaying HTTP status: {req.status_code}")
+            if req.status_code != 200:
+                logger.error(f"[INLINE QUERY ERROR] Subsonic server returned HTTP status {req.status_code} instead of 200. Check if your connected server URL is correct!")
+                return
             response = req.json()
         except Exception as api_err:
             logger.exception(f"[INLINE QUERY ERROR] Failed to fetch/parse getNowPlaying from Subsonic: {api_err}")
