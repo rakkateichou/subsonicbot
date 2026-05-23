@@ -45,8 +45,22 @@ def prefetch_silent_mp3():
     global SILENT_MP3_BYTES
     try:
         logger.info("Prefetching silent MP3 placeholder from remote...")
-        SILENT_MP3_BYTES = requests.get("https://github.com/anars/blank-audio/raw/master/250-milliseconds-of-silence.mp3", timeout=10).content
-        logger.info("Silent MP3 cached successfully.")
+        raw_bytes = requests.get("https://github.com/anars/blank-audio/raw/master/250-milliseconds-of-silence.mp3", timeout=10).content
+        
+        # Inject custom 'Loading...' ID3 tags so Telegram's audio player shows 'Loading...'
+        # while the bot downloads the actual song in the background.
+        bio = io.BytesIO(raw_bytes)
+        try:
+            audio = ID3(bio)
+        except Exception:
+            audio = ID3()
+        audio.add(TIT2(encoding=3, text=["Loading..."]))
+        audio.add(TPE1(encoding=3, text=["Loading..."]))
+        
+        out_bio = io.BytesIO(raw_bytes)
+        audio.save(out_bio)
+        SILENT_MP3_BYTES = out_bio.getvalue()
+        logger.info("Silent MP3 with 'Loading...' ID3 tags cached successfully.")
     except Exception as e:
         logger.warning(f"Failed to prefetch silent MP3 on startup: {e}. Will retry on-demand.")
 
@@ -472,9 +486,9 @@ def query_text(inline_query):
                 continue
                 
             if WEBHOOK_URL:
-                placeholder_url = f"{WEBHOOK_URL.rstrip('/')}/_.mp3"
+                placeholder_url = f"{WEBHOOK_URL.rstrip('/')}/_.mp3?t={track_id}"
             else:
-                placeholder_url = "https://es3n1n.eu/empty.mp3"
+                placeholder_url = f"https://es3n1n.eu/empty.mp3?t={track_id}"
             
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="⚡ Downloading...", callback_data=f"dl_{track_id}"))
@@ -541,9 +555,9 @@ def query_text(inline_query):
                 continue
                 
             if WEBHOOK_URL:
-                placeholder_url = f"{WEBHOOK_URL.rstrip('/')}/_.mp3"
+                placeholder_url = f"{WEBHOOK_URL.rstrip('/')}/_.mp3?t={track_id}"
             else:
-                placeholder_url = "https://es3n1n.eu/empty.mp3"
+                placeholder_url = f"https://es3n1n.eu/empty.mp3?t={track_id}"
             
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton(text="⚡ Downloading...", callback_data=f"dl_{track_id}"))
@@ -825,8 +839,21 @@ def serve_silent_mp3():
     if not SILENT_MP3_BYTES:
         try:
             logger.info("[SILENT MP3] Fetching silent MP3 placeholder from remote on-demand...")
-            SILENT_MP3_BYTES = requests.get("https://github.com/anars/blank-audio/raw/master/250-milliseconds-of-silence.mp3", timeout=10).content
-            logger.info("[SILENT MP3] Silent MP3 cached in-memory.")
+            raw_bytes = requests.get("https://github.com/anars/blank-audio/raw/master/250-milliseconds-of-silence.mp3", timeout=10).content
+            
+            # Inject custom 'Loading...' ID3 tags so Telegram's audio player shows 'Loading...'
+            bio = io.BytesIO(raw_bytes)
+            try:
+                audio = ID3(bio)
+            except Exception:
+                audio = ID3()
+            audio.add(TIT2(encoding=3, text=["Loading..."]))
+            audio.add(TPE1(encoding=3, text=["Loading..."]))
+            
+            out_bio = io.BytesIO(raw_bytes)
+            audio.save(out_bio)
+            SILENT_MP3_BYTES = out_bio.getvalue()
+            logger.info("[SILENT MP3] Silent MP3 with 'Loading...' ID3 tags cached in-memory.")
         except Exception as e:
             logger.error(f"[SILENT MP3 ERROR] Failed to fetch silent MP3: {e}")
             return Response(b'', mimetype='audio/mpeg')
