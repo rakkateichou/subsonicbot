@@ -504,7 +504,8 @@ def query_text(inline_query):
             results.append(item)
             logger.info(f"[INLINE QUERY] Added NP Result Card: '{title}' by '{artist}' (result_id: np_{track_id}, duration: {duration})")
 
-        # Fetch up to 3 recently playing songs using Navidrome's private /api/song endpoint
+        # Fetch recently playing songs using Navidrome's private /api/song endpoint
+        limit_history = 4 if not now_playing_list else 3
         recently_played_list = []
         try:
             logger.info(f"[INLINE QUERY] Authenticating to Navidrome private API at {server_url}/auth/login...")
@@ -519,8 +520,8 @@ def query_text(inline_query):
                 auth_resp = auth_req.json()
                 jwt_token = auth_resp.get('token')
                 if jwt_token:
-                    logger.debug("[INLINE QUERY] JWT login token secured. Retrieving recently played songs...")
-                    recent_url = f"{server_url}/api/song?_end=3&_order=DESC&_sort=play_date&_start=0&recently_played=true"
+                    logger.debug(f"[INLINE QUERY] JWT login token secured. Retrieving {limit_history} recently played songs...")
+                    recent_url = f"{server_url}/api/song?_end={limit_history}&_order=DESC&_sort=play_date&_start=0&recently_played=true"
                     recent_req = requests.get(
                         recent_url, 
                         headers={'x-nd-authorization': f'Bearer {jwt_token}'}, 
@@ -538,8 +539,8 @@ def query_text(inline_query):
         except Exception as navi_err:
             logger.exception(f"[INLINE QUERY ERROR] Failed to fetch Navidrome private API history: {navi_err}")
 
-        # Build the History cards (limit to top 3)
-        for idx, track in enumerate(recently_played_list[:3]):
+        # Build the History cards (limit dynamically based on now playing list)
+        for idx, track in enumerate(recently_played_list[:limit_history]):
             track_id = track.get('id')
             title = track.get('title', 'Unknown Title')
             artist = track.get('artist', 'Unknown Artist')
