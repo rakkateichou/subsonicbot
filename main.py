@@ -453,6 +453,65 @@ def query_text(inline_query):
         
         # Fetch current history from Subsonic API
         auth = get_auth_params(username, password)
+
+        # Check if the user is performing a search query or just opening the bot
+        query_str_clean = query_str.strip()
+        if query_str_clean:
+            import urllib.parse
+            # Perform search3 query on Subsonic
+            search_endpoint = f"{rest_url}/search3?query={urllib.parse.quote(query_str_clean)}&songCount=20&{auth}"
+            logger.info(f"[INLINE QUERY] Searching Subsonic for '{query_str_clean}' for user {user_id}...")
+            
+            try:
+                req = requests.get(search_endpoint, timeout=10)
+                logger.debug(f"[INLINE QUERY] search3 HTTP status: {req.status_code}")
+                if req.status_code != 200:
+                    logger.error(f"[INLINE QUERY ERROR] Subsonic server returned HTTP status {req.status_code} for search3.")
+                    return
+                response = req.json()
+            except Exception as api_err:
+                logger.exception(f"[INLINE QUERY ERROR] Failed to fetch/parse search3: {api_err}")
+                return
+                
+            search_results = response.get('subsonic-response', {}).get('searchResult3', {}).get('song', [])
+            if not isinstance(search_results, list):
+                search_results = [search_results] if search_results else []
+                
+            logger.info(f"[INLINE QUERY] search3 parsed. Found {len(search_results)} track(s) matching '{query_str_clean}'.")
+            results = []
+            
+            for track in search_results:
+                track_id = track.get('id')
+                title = track.get('title', 'Unknown Title')
+                artist = track.get('artist', 'Unknown Artist')
+                duration = int(track.get('duration')) if track.get('duration') else None
+                
+                if not track_id:
+                    continue
+                    
+                if WEBHOOK_URL:
+                    placeholder_url = f"{WEBHOOK_URL.rstrip('/')}/_.mp3?t={track_id}"
+                else:
+                    placeholder_url = f"https://es3n1n.eu/empty.mp3?t={track_id}"
+                
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton(text="⚡ Downloading...", callback_data=f"dl_{track_id}"))
+                
+                item = types.InlineQueryResultAudio(
+                    id=f"np_{track_id}",
+                    audio_url=placeholder_url,
+                    title=title,
+                    performer=artist,
+                    audio_duration=duration,
+                    reply_markup=markup
+                )
+                results.append(item)
+                logger.info(f"[INLINE QUERY] Added Search Result Card: '{title}' by '{artist}' (result_id: np_{track_id}, duration: {duration})")
+                
+            logger.info(f"[INLINE QUERY] Answering search query {inline_query.id} with {len(results)} total card options.")
+            ans_ok = bot.answer_inline_query(inline_query.id, results, cache_time=0)
+            logger.info(f"[INLINE QUERY SUCCESS] answer_inline_query API response for search query {inline_query.id}: {ans_ok}")
+            return
         now_playing_endpoint = f"{rest_url}/getNowPlaying?{auth}"
         logger.info(f"[INLINE QUERY] Fetching Subsonic getNowPlaying history for user {user_id} from {rest_url}...")
         
